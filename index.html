@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>Visualizing World Trade</title>
+  <meta charset="utf-8">
+  <script src="./d3.js"></script>
+  <style type="text/css">
+
+    /* General styles. */
+    body { font-family: "Helvetica Neue", Helvetica, verdana, sans-serif; color: #333; font-size: 16px; padding-bottom: 1em; }
+    .hidden { display: none; }
+    h1 { font-size: 3em; font-weight: 300; text-rendering: optimizelegibility; }
+    div#main { width: 1200px; margin: 0 auto; }
+    div#main h3 { margin-bottom: 0.25em; font-size: 1.25em; }
+
+    /* Settings. */
+    div#settings { width: 900px; margin: 0 auto; padding-bottom: 0.5em; min-height: 150px; }
+    div#settings div { margin: 0 0 0.5em; }
+    div#settings hr { border: none; height: 1px; background: lightgray; margin: 1em 0; }
+    div#settings div strong { display: inline-block; width: 7em; }
+    div#settings label { margin-right: 1.5em; cursor: pointer; }
+    div#settings label input[type=checkbox], div#settings label input[type=radio], div#settings select { vertical-align: bottom; cursor: pointer; }
+    div#settings input[type=range] { vertical-align: middle; width: 200px; }
+
+    /* Settings specifics. */
+    div#settings span.year_label { color: gray; font-size: 0.75em; }
+
+    /* Chart. */
+    svg { display: block; margin: 0 auto; cursor: default; }
+    svg.inactive { pointer-events: none; }
+
+    /* Chord groups. */
+    svg g#chord_groups path {}
+    svg g#chord_groups path.highlighted { stroke: black; }
+
+    /* Chord labels. */
+    svg g#chord_labels g text { font-size: 0.75em; dominant-baseline: middle; }
+    svg g#chord_labels g.highlighted text { font-weight: bold; font-size: 1em; }
+
+    /* Chord paths. */
+    svg g#chord_paths path {}
+    svg g#chord_paths path.highlighted { }
+
+  </style>
+</head>
+<body>
+
+  <!-- Content skeleton here. Everything hidden on load to prevent ugly partial rendering or non-functional content in case of error. -->
+  <div id="main" class="hidden">
+    <h1>Visualizing World Trade</h1>
+    <div id="settings">
+      <!-- <h3>Settings</h3> -->
+      <div id="settings_year">
+        <strong>Year:</strong> 
+        <span class="year_label" id="min_year_label"></span>
+        <input type="range" step="1" id="year_slider" name="year" />
+        <span class="year_label" id="max_year_label"></span>
+      </div>
+      <div id="settings_continents">
+        <strong>Continents:</strong> 
+      </div>
+      <div id="settings_sort">
+        <strong>Sort:</strong> 
+        <label title="Continent"><input type="radio" name="sort_by" value="continent" checked="checked" />Continent</label>
+        <label title="Country"><input type="radio" name="sort_by" value="country" />Country</label>
+        <label title="GDP"><input type="radio" name="sort_by" value="gdp" />GDP</label>
+        <label title="Export Volume"><input type="radio" name="sort_by" value="export_volume" />Export Volume</label>
+      </div>
+      <hr />
+      <div id="settings_chord_size">
+        <strong>Chord Size:</strong> 
+        <label title="Proportional"><input type="radio" name="chord_size" value="proportional" checked="checked" />Proportional</label>
+        <label title="Constant"><input type="radio" name="chord_size" value="importers" />Constant</label>
+      </div>
+    </div>
+
+    <!-- Rendering area. -->
+    <svg>
+      <g id="main_chart_group">
+        <g id="chord_groups" />
+        <g id="chord_labels" />
+        <g id="chord_paths" />
+      </g>
+    </svg>
+  </div>
+
+  <!-- Execution -->
+  <script type="text/javascript">
+
+    ///// Settings & Configuration
+
+    // Display configuration.
+    var chart_width  = 1100,
+        chart_height = 1200,
+        inner_radius = Math.min(chart_width, chart_height) * .38,
+        outer_radius = inner_radius * 1.05;
+
+    // Field-name mapping. Cannot be used for ordering because JS does not guarantee object key order.
+    // Un-named fields are being retained for use but have no need for display.
+    var fields = {
+      'country_id':      null,
+      'name':            'Country',
+      'continent':       'Continent',
+      'gdp':             'GDP',
+      'year':            'Year',
+      'top_partners':    'Top Trading Partners'
+    }
+
+    // Several highlight settings follow. We need to set these manually in several places (for tweening purposes) so we define them here.
+
+    // Group highlight settings.
+    var group_highlight_opacity_none = 1.0,
+        group_highlight_opacity_on   = 1.0,
+        group_highlight_opacity_off  = .15;
+
+    // Label highlight settings.
+    var label_highlight_opacity_none = .70,
+        label_highlight_opacity_on   = 1.0,
+        label_highlight_opacity_comp = 1.0,
+        label_highlight_opacity_off  = .15;
+
+    // Chord highlight settings.
+    var chord_highlight_opacity_none = .35,
+        chord_highlight_opacity_on   = .80,
+        chord_highlight_opacity_off  = .10;
+
+    // Transition settings.
+    var transition_step_duration = 500;
+
+    ///// Data Objects
+
+    // Main countries data.
+    var data = [];
+
+    // Store of currently-displayed data. Useful given how chord layout handles data.
+    var current_data;
+    var current_data_exports;
+    var old_data;
+    var compound_data;
+    var current_matrix;
+
+    // Data domains. Useful when we need to know the nature of the data.
+    var data_domains = {};
+
+    ///// Chord Objects
+
+    // Actual chord layout.
+    var chord_layout = d3.layout.chord()
+      .padding(0.005);
+
+    // Arc for groups.
+    var chord_group_svg_arc = d3.svg.arc().innerRadius(inner_radius).outerRadius(outer_radius);
+
+    // Arc for chord paths.
+    var chord_svg_chord = d3.svg.chord().radius(inner_radius);
+
+
+    ///// Useful Global Objects
+    
+    // Master container for all settings.
+    // Keeping this maintained helps us avoid repeatedly accessing the UI for settings info.
+    var settings = {};
+
+    // Scales.
+    scale_continents = d3.scale.category10();
+
+    // Export value formatter.
+    var trade_format = d3.format('$.2s');
+
+
+    ///// UI Objects
+
+    // Main HTML containers.
+    var main_container = d3.select('div#main');
+    var settings_container = d3.select('div#settings');
+
+    // Graphical objects.
+    var svg = d3.select('svg');
+    var main_chart_group = svg.select('g#main_chart_group');
+    var chord_groups = main_chart_group.select('g#chord_groups');
+    var chord_paths = main_chart_group.select('g#chord_paths');
+    var chord_labels = main_chart_group.select('g#chord_labels');
+
+
+
+    ///// Settings Functions
+
+    /**
+      * Update the settings object.
+      * This method will traverse all settings UI elements and update the dictionary.
+      * This will be much easier in the long run than repeatedly accessing the UI representations themselves.
+      */
+    function update_settings() {
+      // Year setting.
+      settings.year = settings_container.select('div#settings_year input#year_slider').node().value;
+
+      // Chord size setting.
+      settings.chord_size = settings_container.select('div#settings_chord_size input[type=radio]:checked').node().value;
+
+      // Sort setting.
+      settings.sort = settings_container.select('div#settings_sort input[type=radio]:checked').node().value;
+
+      // Continent settings.
+      settings.continents = [];
+      settings_container.selectAll("div#settings_continents input[type=checkbox]:checked").each(function() {
+        settings.continents.push(d3.select(this).attr("value"));
+      });
+      if (! settings.continents.length)
+        settings.continents = data_domains.continents
+    }
+
+
+    ///// Data Update Functions
+
+    // These functions handle data changes, chord display.
+
+    /**
+      * Apply filters to data and set the current dataset as a thinned dataset.
+      */
+    function filter_data() {
+      // Set old dataset if needed.
+      if (current_data != undefined)
+        old_data = current_data.slice();
+      // First pass of current data.
+      current_data = data.filter(function(d) {
+        return d.year == settings.year && settings.continents.indexOf(d.continent) != -1;
+      });
+      // Create compound data.
+      // compound_data = (old_data != undefined) ? old_data.concat(current_data) : current_data.slice();
+    }
+
+    /**
+      * Turn the current dataset into a matrix for chord use.
+      * Also updates helper objects to ensure object constancy.
+      */
+    function matricize_data() {
+      // Construct an empty matrix and an empty store of trade data.
+      current_matrix = [];
+      current_data_exports = {};
+      while (current_matrix.length < current_data.length)
+        current_matrix.push(Array.apply(null, new Array(current_data.length)).map(Number.prototype.valueOf,0));
+
+      // Get current order of countries in order to determine how to fill matrix.
+      // Will also be useful for joining.
+      var current_data_indicies_countries = current_data.map(function(d) { return d.country_id });
+
+      // Fill matrix and store of trade data.
+      // Must zero out cases where trade partner is not in dataset.
+      for (var i = 0; i < current_data.length; i++) {
+        current_data_exports[current_data[i].country_id] = {}; // Ensure container for this country's exports.
+        for (p of current_data[i].top_partners) {
+          var partner_index = current_data_indicies_countries.indexOf(p.country_id);
+          if (partner_index > -1) {
+            // Update matrix.
+            current_matrix[i][partner_index] = (
+              (settings.chord_size == 'proportional') ? p.total_export : 1.
+            );
+            // Update exports store.
+            current_data_exports[current_data[i].country_id][p.country_id] = p.total_export;
+          }
+        }
+      }
+    }
+
+    /**
+      * Perform sorting.
+      */
+    function sort_data() {
+      if (settings.sort == 'country')
+        current_data.sort(function (a,b) { return a.name.localeCompare(b.name) });
+      else if (settings.sort == 'gdp')
+        current_data.sort(function (a,b) { return b.gdp - a.gdp });
+      else if (settings.sort == 'export_volume')
+        current_data.sort(function (a,b) { return b.export_volume - a.export_volume });
+      // No need to do anything for continent. Already sorted by continent by default.
+    }
+    
+
+    /**
+      * Update chord diagram.
+      */
+    function update_chord() {
+      // Apply matrix to layout.
+      chord_layout.matrix(current_matrix);
+
+      // Get groups dataset.
+      var chord_group_data = chord_layout.groups();
+
+      // Join data. We have to be very careful about getting join keys as D3's chord layout makes it very inconvenient to persist them.
+      // A join will first traverse any existing joined data, then the new data we passed in (in keeping with D3's join paradigm).
+      // But the chord data itself has no country metadata, so we need to use a "leftover" array of country objects from the last update to get the join key.
+      var simple_count = 0;
+      var groups = chord_groups.selectAll('path').data(chord_group_data, function(d, i) {
+        var k;
+        if (simple_count == i && old_data != undefined)
+          k = old_data[d.index].name;
+        else
+          k = current_data[d.index].name;
+        simple_count++;
+        return k;
+      });
+      // Handle labels in the same way.
+      simple_count = 0;
+      var labels = chord_labels.selectAll('g').data(chord_group_data, function(d, i) {
+        var k;
+        if (simple_count == i && old_data != undefined)
+          k = old_data[d.index].name;
+        else
+          k = current_data[d.index].name;
+        simple_count++;
+        return k;
+      });
+      // ...as well as chords.
+      simple_count = 0;
+      var chords = chord_paths.selectAll('path').data(chord_layout.chords, function(d, i) {
+          var k;
+          if (simple_count == i && old_data != undefined)
+            k = old_data[d.source.index].country_id+'-'+old_data[d.source.subindex].country_id;
+          else
+            k = current_data[d.source.index].country_id+'-'+current_data[d.source.subindex].country_id;
+          simple_count++;
+          return k;
+        });
+
+      // Add elements and event listeners.
+      // Groups.
+      groups.enter().append('path')
+        .each(function (d) { this.__current__ = d; })
+        .attr('d', chord_group_svg_arc)
+        //  Nevermind: interactions make these tooltips look very awkward and redundant.
+        // .html(function (d, i) { return '<title>'+current_data[i].name+'</title>' })
+        .style({
+          'fill': function (d, i) { return scale_continents(current_data[i].continent) },
+          // 'stroke': function (d, i) { return scale_continents(current_data[i].continent) },
+          'opacity': 0
+        })
+        .on('mouseover', hover_country)
+        .on('mouseout', unhover);
+      // Labels.
+      labels.enter().append('g')
+        .each(function (d) { this.__current__ = d; })
+        .attr({
+          'transform': function(d) {
+            return 'rotate(' + ((d.startAngle+d.endAngle)/2 * 180 / Math.PI - 90) + ')' + 'translate(' + (outer_radius+2) + ',0)';
+          }
+        })
+        .style({
+          'fill': function (d, i) { return scale_continents(current_data[i].continent) },
+          'opacity': 0
+        })
+        .on('mouseover', hover_country)
+        .on('mouseout', unhover)
+        // Text elements.
+        .append('text')
+          .text(function (d, i) { return current_data[i].name });
+      // Chords.
+      chords.enter().append('path')
+        .each(function (d) {
+          // Store current data for tweening purposes.
+          this.__current__ = d;
+          // Store source/target colors in data based on continents. Store once in DOM object so we don't need to update.
+          this.__fills__ = {};
+          this.__fills__.source = scale_continents(current_data[d.source.index].continent);
+          this.__fills__.target = scale_continents(current_data[d.target.index].continent);
+        })
+        .attr('d', chord_svg_chord.radius(inner_radius))
+        .style({
+          'fill': function (d) { return (this.__fills__.source == this.__fills__.target) ? this.__fills__.source : 'gray'; },
+          'opacity': 0
+        })
+        .on('mouseover', hover_chord)
+        .on('mouseout', unhover);
+
+      // Remove elements.
+      groups.exit().remove();
+      labels.exit().remove();
+      chords.exit().remove();
+
+      // Update elements.
+      groups
+        .transition().duration(transition_step_duration)
+        .attrTween('d',arc_tween)
+        .each('end',function (d) {
+          this.__current__ = d;
+          d3.select(this).transition().duration(transition_step_duration).style('opacity',1);
+        })
+      chords
+        .html(function (d, i) {
+          // Tool tips get a little bit complex. We cannot rely on the target/source values because those may be one if chords are constantly-sized.
+          // Therefore, we need to get them from current_data_exports. This convoluted call does so.
+          var info_tuples = [
+            [current_data[d.target.index].name, current_data_exports[current_data[d.target.index].country_id][current_data[d.source.index].country_id]],
+            [current_data[d.source.index].name, current_data_exports[current_data[d.source.index].country_id][current_data[d.target.index].country_id]]
+          ];
+          info_tuples.sort(function (a,b) { return b[1] - a[1] })
+          var info_text = info_tuples[0][0]+' to '+info_tuples[1][0]+': '+trade_format(info_tuples[0][1]) + '<br />' +
+                          info_tuples[1][0]+' to '+info_tuples[0][0]+': '+trade_format(info_tuples[1][1]);
+          return '<title>'+info_text+'</title>';
+        })
+        .transition().duration(transition_step_duration)
+        .attrTween('d',chord_tween)
+        .style('fill', function (d) { return (this.__fills__.source == this.__fills__.target) ? this.__fills__.source : 'gray'; })
+        .each('end',function (d) {
+          this.__current__ = d;
+          d3.select(this).transition().duration(transition_step_duration).style('opacity', chord_highlight_opacity_none)
+        });
+      labels
+        .transition().duration(transition_step_duration)
+        .attrTween('transform', arc_tween_transform)
+        .each('end',function (d) {
+          this.__current__ = d;
+          d3.select(this).transition().duration(transition_step_duration).style('opacity',label_highlight_opacity_none);
+        });
+      // Update label formatting.
+      labels.selectAll('text')
+        .data(function (d) { return [d]; })
+        .attr('transform', function (d) {
+          return ((d.startAngle+d.endAngle)/2 > Math.PI) ? 'rotate(180)' : '';
+        })
+        .style('text-anchor', function (d) {
+          return ((d.startAngle+d.endAngle)/2 > Math.PI) ? 'end' : 'start';
+        });
+    }
+
+    /**
+      * Function to handle arc tween effect. Used to ensure that objects do not deform when animating.
+      * Inspiration from: http://bl.ocks.org/mbostock/1346410.
+      */
+    function arc_tween(d, i, a) {
+      var interp = d3.interpolate(this.__current__, d);
+      return function (t) {
+        return chord_group_svg_arc(interp(t));
+      };
+    }
+
+    /**
+      * Function to handle arc tween effect for chords. Based on the above.
+      */
+    function chord_tween(d, i, a) {
+      var interp = d3.interpolate(this.__current__, d);
+      return function (t) {
+        return chord_svg_chord(interp(t));
+      };
+    }
+
+    /**
+      * Function to handle arc tween effect for transforms (as opposed to d elements). Based on the above.
+      */
+    function arc_tween_transform(d, i, a) {
+      var interp = d3.interpolate(this.__current__, d);
+      return function (t) {
+        var interoplated = interp(t);
+        return 'rotate(' + ((interoplated.startAngle+interoplated.endAngle)/2 * 180 / Math.PI - 90) + ')' + 'translate(' + (outer_radius+2) + ',0)';
+      };
+    }
+
+    /**
+      * Handle hover group/label events. Highlight elements associated with the hovered country.
+      */
+    function hover_country(datum) {
+      // Use datum index to get export destinations.
+      var trade_partners = [];
+      for (var i = 0; i < current_matrix[datum.index].length; i++)
+        if (current_matrix[datum.index][i] > 0)
+          trade_partners.push(i);
+      // Chord paths.
+      chord_paths.selectAll('path')
+        .style({
+          'fill': function (d) {
+            return (d.source.index == datum.index) ? this.__fills__.target : this.__fills__.source;
+          },
+          'opacity': function (d) {
+            if (
+              (d.source.index == datum.index && trade_partners.indexOf(d.target.index) > -1) || 
+              (d.target.index == datum.index && trade_partners.indexOf(d.source.index) > -1)
+            )
+              return chord_highlight_opacity_on;
+            else
+              return chord_highlight_opacity_off;
+          }
+        });
+      // Chord groups.
+      chord_groups.selectAll('path')
+        .style('opacity', function (d) {
+          if (d.index == datum.index)
+            return group_highlight_opacity_on;
+          else if (trade_partners.indexOf(d.index) > -1)
+            return group_highlight_opacity_none;
+          else
+            return group_highlight_opacity_off;
+        })
+        .classed('highlighted', function (d) { return d.index == datum.index });
+      // Chord labels.
+      chord_labels.selectAll('g')
+        .style({
+          'opacity': function (d) {
+            if (d.index == datum.index)
+              return label_highlight_opacity_on;
+            else if (trade_partners.indexOf(d.index) > -1)
+              return label_highlight_opacity_comp;
+            else
+              return label_highlight_opacity_off;
+          }
+        })
+        .classed('highlighted', function (d) { return d.index == datum.index; });
+    }
+
+    /**
+      * Handle hovering over chords. Only highlight chord and two ends.
+      */
+    function hover_chord(datum) {
+      // Get both indices to facilitate later comparisons.
+      var indices = [datum.source.index, datum.target.index];
+      // Chord paths. Highlight this one; un-highlight all others.
+      chord_paths.selectAll('path').style('opacity',chord_highlight_opacity_off);
+      d3.select(this).style('opacity',chord_highlight_opacity_on);
+      // Chord groups.
+      chord_groups.selectAll('path')
+        .style('opacity', function (d) {
+          if (indices.indexOf(d.index) > -1)
+            return group_highlight_opacity_on;
+          else
+            return group_highlight_opacity_off;
+        })
+        .classed('highlighted', function (d) { return indices.indexOf(d.index) > -1 });
+      // Chord labels.
+      chord_labels.selectAll('g')
+        .style('opacity', function (d) { return (indices.indexOf(d.index) > -1) ? label_highlight_opacity_on : label_highlight_opacity_off })
+        .classed('highlighted', function (d) { return indices.indexOf(d.index) > -1 });
+    }
+
+    /**
+      * Handle unhover events. Reset all appearances to default.
+      */
+    function unhover() {
+      chord_paths.selectAll('path')
+        .style({
+          'fill': function (d) { return (this.__fills__.source == this.__fills__.target) ? this.__fills__.source : 'gray'; },
+          'opacity': chord_highlight_opacity_none
+        });
+      chord_groups.selectAll('path')
+        .style('opacity', group_highlight_opacity_none)
+        .classed('highlighted', false);
+      chord_labels.selectAll('g')
+        .style({
+          'opacity': label_highlight_opacity_none
+        })
+        .classed('highlighted', false);
+    }
+
+    /**
+      * Clearinghouse function to respond to user input.
+      * Updates settings, then calls helper filter/aggregation functions and assembles resulting dataset.
+      * This design pattern allows an arbitrary number of filters/aggregations.
+      */
+    function update_display() {
+      // Disable SVG events.
+      svg.attr('class','inactive');
+
+      // Update settings first.
+      update_settings();
+
+      // Filter data.
+      filter_data();
+
+      // Sort data if we ever need to.
+      sort_data();
+
+      // Matricize data.
+      matricize_data();
+
+      // Update chord diagram.
+      update_chord();
+
+      // Re-enable SVG events.
+      svg.transition().delay(transition_step_duration*2).each('end', function() { svg.attr('class','') });
+    }
+
+
+    ///// Initialization
+
+    /**
+      * Initialize data.
+      * Takes dataset structured by year, flattens it, and filters any records without appropriate data.
+      */
+    function initialize_data(raw_data) {
+      // Flatten data to country-year level.
+      for (d of raw_data)
+        for (y of d.years) {
+          var country_year_data = {};
+          for (f in fields)
+            if (y[f] != undefined)
+              country_year_data[f] = y[f];
+            else
+              country_year_data[f] = d[f];
+          // Only push items that have trade partners.
+          if ('top_partners' in country_year_data) {
+            // Get total export volume for each observation.
+            country_year_data.export_volume = d3.sum(country_year_data.top_partners,function(d) { return d.total_export });
+            // Push it, p-push it real good...Salt and Pepa's here, and we're in effect.
+            data.push(country_year_data);
+          }
+        }
+
+      // Sort by continent-name immediately. Will facilitate common sorting.
+      data = data.sort(function(a,b) {
+        return ((a.continent != b.continent) ? a.continent.localeCompare(b.continent) : a.name.localeCompare(b.name));
+      });
+
+      /// Ancillary Data
+
+      // Store distinct set of continents and set up continents color scale.
+      data_domains.continents = d3.nest()
+        .key(function (d) { return d.continent })
+        .entries(data).map(function(d) { return d.key })
+        .sort();
+      scale_continents.domain(data_domains);
+
+      // Years.
+      data_domains.years = d3.extent(data, function(d) { return d.year; });
+    }
+
+    /**
+      * Initialize settings.
+      */
+    function initialize_settings() {
+      /// Create Settings Elements
+
+      // Year.
+      settings_container.selectAll('span.year_label').each(function (d,i) {
+        this.innerText = data_domains.years[i];
+      });
+      settings_container.select('input#year_slider').attr({
+        'min': data_domains.years[0],
+        'max': data_domains.years[1],
+        'value': Math.floor((data_domains.years[1]+data_domains.years[0])/2)
+      });
+
+      // Continents.
+      var continent_labels = settings_container.selectAll('div#settings_continents').selectAll('label')
+        .data(data_domains.continents)
+        .enter().append('label');
+      continent_labels.append('input')
+        .attr({
+          'type': 'checkbox',
+          'name': 'continent',
+          'value': function (d) { return d; }
+        });
+      continent_labels
+        .attr('title',function (d) { return d; })
+        .append('span')
+        .text(function(d) { return d; });
+
+      /// Bind Events
+
+      // Bind update event to all settings inputs of certain types.
+      settings_container.selectAll('input[type=checkbox], input[type=radio], input[type=range]').on('change',function() {
+        update_display();
+      });
+    }
+
+    /**
+      * Initialize UI elements. Any general UI setup can go here.
+      * This function calls update_display() for the first time and unhides the UI.
+      */
+    function initialize_ui() {
+      // Set SVG width.
+      svg.attr({
+        'width': chart_width,
+        'height': chart_height
+      });
+
+      // Move main chart group to ensure centered layout.
+      main_chart_group.attr('transform', 'translate(' + chart_width / 2 + ',' + chart_height / 2 + ')');
+
+      // Update everything and show it all.
+      update_display();
+      main_container.classed('hidden', false);
+    }
+
+    /**
+      * Initialize our graph. This is what actually gets data and begins the layout process.
+      */
+    function initialize() {
+      // Retrieve data and assign to global data variable.
+      d3.json('./countries_1995_2012.json', function(error, raw_data) {
+        // Perform any pre-processing we need for data.
+        initialize_data(raw_data);
+        // Initialize settings.
+        initialize_settings();
+        // Show UI.
+        initialize_ui();
+      });
+    }
+
+    // Go!
+    initialize();
+    
+  </script>
+
+</body>
+</html>
