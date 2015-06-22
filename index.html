@@ -10,13 +10,17 @@
     body { font-family: "Helvetica Neue", Helvetica, verdana, sans-serif; color: #333; font-size: 16px; padding-bottom: 1em; }
     .hidden { display: none; }
     h1 { font-size: 3em; font-weight: 300; text-rendering: optimizelegibility; }
+    p { margin-bottom: 1em; }
+    hr { border: none; height: 1px; background: lightgray; margin: 1em 0; }
+    a { color: steelblue; text-decoration: none; }
+    a:hover { color: lightblue; }
+
     div#main { width: 1200px; margin: 0 auto; }
     div#main h3 { margin-bottom: 0.25em; font-size: 1.25em; }
 
     /* Settings. */
-    div#settings { width: 900px; margin: 0 auto; padding-bottom: 0.5em; min-height: 150px; }
+    div#settings { width: 900px; margin: 1em auto 0; padding-bottom: 0.5em; min-height: 150px; }
     div#settings div { margin: 0 0 0.5em; }
-    div#settings hr { border: none; height: 1px; background: lightgray; margin: 1em 0; }
     div#settings div strong { display: inline-block; width: 7em; }
     div#settings label { margin-right: 1.5em; cursor: pointer; }
     div#settings label input[type=checkbox], div#settings label input[type=radio], div#settings select { vertical-align: bottom; cursor: pointer; }
@@ -48,6 +52,10 @@
   <!-- Content skeleton here. Everything hidden on load to prevent ugly partial rendering or non-functional content in case of error. -->
   <div id="main" class="hidden">
     <h1>Visualizing World Trade</h1>
+    <p>The following <a href="https://en.wikipedia.org/wiki/Chord_diagram">chord diagram</a> was produced as part of a homework assignment for <a href="http://www.cs171.org/">CS 171 at Harvard</a>. It depicts countries&rsquo; top ten export destinations from 1995 to 2012, and allows interaction with filters and hovering effects. Colors reflect each country&rsquo;s associated continent. A large display is recommended.</p>
+    <p>A chord diagram is likely not the best option for displaying this information and the data source is imperfect. But it proved a great chance to learn more about Javascript data manipulation and D3 transitions. Source is available on <a href="http://www.github.com/micahlanier/world-trade-viz">GitHub</a>; D3 developers may find the approach to data manipulation and animated transitions useful.</p>
+    <hr />
+
     <div id="settings">
       <!-- <h3>Settings</h3> -->
       <div id="settings_year">
