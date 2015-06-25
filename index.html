@@ -52,8 +52,8 @@
   <!-- Content skeleton here. Everything hidden on load to prevent ugly partial rendering or non-functional content in case of error. -->
   <div id="main" class="hidden">
     <h1>Visualizing World Trade</h1>
-    <p>The following <a href="https://en.wikipedia.org/wiki/Chord_diagram">chord diagram</a> was produced as part of a homework assignment for <a href="http://www.cs171.org/">CS 171 at Harvard</a>. It depicts countries&rsquo; top ten export destinations from 1995 to 2012, and allows interaction with filters and hovering effects. Colors reflect each country&rsquo;s associated continent. A large display is recommended.</p>
-    <p>The data source is imperfect and a chord diagram may not be the best choice to display it&mdash;the text overlap and unwieldy density are clear. But it proved a great chance to learn more about Javascript data manipulation and D3 transitions. Source is available on <a href="http://www.github.com/micahlanier/world-trade-viz">GitHub</a>; D3 developers may find the approach to data manipulation and animated transitions useful.</p>
+    <p>The following <a href="https://en.wikipedia.org/wiki/Chord_diagram">chord diagram</a> was produced as part of a homework assignment for <a href="http://www.cs171.org/">CS 171 at Harvard</a>. It depicts countries&rsquo; top ten export destinations from 1995 to 2012, and allows interaction with filters and hovering effects. Colors reflect each country&rsquo;s associated continent. A large display and Chrome/Safari are recommended.</p>
+    <p>The data source is imperfect and a chord diagram may not be the best choice to display it&mdash;the text overlap and unwieldy density are clear. But it proved a great chance to learn more about Javascript data manipulation and D3 transitions. Source is available on <a href="http://www.github.com/micahlanier/world-trade-viz">GitHub</a>; D3 developers may find the approach to data manipulation and tweening transitions useful.</p>
     <hr />
 
     <div id="settings">
@@ -85,9 +85,9 @@
     <!-- Rendering area. -->
     <svg>
       <g id="main_chart_group">
-        <g id="chord_groups" />
-        <g id="chord_labels" />
-        <g id="chord_paths" />
+        <g id="chord_groups"></g>
+        <g id="chord_labels"></g>
+        <g id="chord_paths"></g>
       </g>
     </svg>
   </div>
@@ -256,15 +256,16 @@
       // Must zero out cases where trade partner is not in dataset.
       for (var i = 0; i < current_data.length; i++) {
         current_data_exports[current_data[i].country_id] = {}; // Ensure container for this country's exports.
-        for (p of current_data[i].top_partners) {
-          var partner_index = current_data_indicies_countries.indexOf(p.country_id);
+        for (var p = 0; p < current_data[i].top_partners.length; p++) {
+          var partner = current_data[i].top_partners[p];
+          var partner_index = current_data_indicies_countries.indexOf(partner.country_id);
           if (partner_index > -1) {
             // Update matrix.
             current_matrix[i][partner_index] = (
-              (settings.chord_size == 'proportional') ? p.total_export : 1.
+              (settings.chord_size == 'proportional') ? partner.total_export : 1.
             );
             // Update exports store.
-            current_data_exports[current_data[i].country_id][p.country_id] = p.total_export;
+            current_data_exports[current_data[i].country_id][partner.country_id] = partner.total_export;
           }
         }
       }
@@ -593,22 +594,25 @@
       */
     function initialize_data(raw_data) {
       // Flatten data to country-year level.
-      for (d of raw_data)
-        for (y of d.years) {
+      for (var d = 0; d < raw_data.length; d++) {
+        var datum = raw_data[d];
+        for (var y = 0; y < datum.years.length; y++) {
+          var year = datum.years[y];
           var country_year_data = {};
           for (f in fields)
-            if (y[f] != undefined)
-              country_year_data[f] = y[f];
+            if (year[f] != undefined)
+              country_year_data[f] = year[f];
             else
-              country_year_data[f] = d[f];
+              country_year_data[f] = datum[f];
           // Only push items that have trade partners.
           if ('top_partners' in country_year_data) {
             // Get total export volume for each observation.
-            country_year_data.export_volume = d3.sum(country_year_data.top_partners,function(d) { return d.total_export });
+            country_year_data.export_volume = d3.sum(country_year_data.top_partners,function(pd) { return pd.total_export });
             // Push it, p-push it real good...Salt and Pepa's here, and we're in effect.
             data.push(country_year_data);
           }
         }
+      }
 
       // Sort by continent-name immediately. Will facilitate common sorting.
       data = data.sort(function(a,b) {
